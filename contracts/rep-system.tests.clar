@@ -37,8 +37,7 @@
       (last-rated-height (get-rated-height user-to-rate))
       (all-ratings (get ratings (default-to {ratings: (list)} (map-get? all-ratings-made tx-sender))))
       (previous-amount (match (find-index user-to-rate)
-        index (get amount (unwrap-panic (element-at? (get ratings (default-to {ratings: (list)} (map-get? user-ratings tx-sender))) index)))
-        0))
+        index (get amount (unwrap-panic (element-at? (get ratings (default-to {ratings: (list)} (map-get? user-ratings tx-sender))) index))) 0))
     )
     (if (or (<= reputation-amount (if (>= (default-to 0 (get-user-reputation tx-sender)) 50) -20 -10))
             (>= reputation-amount (if (>= (default-to 0 (get-user-reputation tx-sender)) 50) 20 10))
@@ -52,6 +51,7 @@
       (begin
         (try! (rate-user user-to-rate reputation-amount))
         (let ((user-to-rate-updated-reputation (default-to 0 (get-user-reputation user-to-rate))))
+          ;; TODO: Add asserts!
           (if (not (is-eq user-to-rate-updated-reputation (+ user-to-rate-current-reputation (- reputation-amount previous-amount))))
             (err (to-uint user-to-rate-updated-reputation))
             (ok true)
