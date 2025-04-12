@@ -1,9 +1,22 @@
+;; Reputation System Contract
+;; This contract implements a reputation system where users can rate each other
+;; within certain bounds and with decay over time.
+
+;; Error codes
+;; Validation errors (100-199)
 (define-constant err-owner-only (err u100))
 (define-constant err-same-user (err u101))
 (define-constant err-invalid-reputation-amount (err u102))
 (define-constant err-maximum-ratings-reached (err u103))
-(define-constant err-already-made-at-this-block-height (err u104))
-(define-constant err-bop (err u105))
+(define-constant err-already-rated-recently (err u104))
+(define-constant err-invalid-operation (err u105))
+
+;; System constants
+(define-constant MIN_REPUTATION -100)
+(define-constant MAX_REPUTATION 100)
+(define-constant DECAY_PERIOD u1000)
+(define-constant MAX_RATINGS u200)
+(define-constant INITIAL_BLOCKS u1000)
 
 (define-map user-reputation principal {reputation: int})
 (define-map user-decay principal {last-decay: uint})
@@ -11,31 +24,43 @@
 (define-map received-ratings principal {ratings: (list 200 {user: principal, amount: int, height: uint})})
 (define-map all-ratings-made principal {ratings: (list 200 {user: principal, amount: int, height: uint})})
 
+;; Rate another user's reputation
+;; @param user-to-rate: The principal to rate
+;; @param reputation-amount: The amount of reputation to give/take (-20 to 20)
+;; @returns: The updated reputation of the rated user
 (define-public (rate-user (user-to-rate principal) (reputation-amount int))
   (begin
+    ;; Validate user is not rating themselves
     (asserts! (not (is-eq tx-sender user-to-rate)) err-same-user)
+    
     (let
       (
         (user-to-rate-reputation (default-to 0 (get-user-reputation user-to-rate)))
+        (rater-reputation (default-to 0 (get-user-reputation tx-sender)))
         (existing-data (default-to {ratings: (list)} (map-get? user-ratings tx-sender)))
         (existing-received-data (default-to {ratings: (list)} (map-get? received-ratings user-to-rate)))
         (existing-all-ratings (default-to {ratings: (list)} (map-get? all-ratings-made tx-sender)))
         (new-rating {user: user-to-rate, amount: reputation-amount, height: stacks-block-height})
         (new-received-rating {user: tx-sender, amount: reputation-amount, height: stacks-block-height})
+        (min-allowed (if (>= rater-reputation 50) -20 -10))
+        (max-allowed (if (>= rater-reputation 50) 20 10))
+        (new-total-reputation (+ user-to-rate-reputation reputation-amount))
       )
+      ;; Validate reputation amount and bounds
       (asserts! (and 
-                  (>= reputation-amount (if (>= (default-to 0 (get-user-reputation tx-sender)) 50) -20 -10))
-                  (<= reputation-amount (if (>= (default-to 0 (get-user-reputation tx-sender)) 50) 20 10))
-                  (>= (+ user-to-rate-reputation reputation-amount) -100) 
-                  (<= (+ user-to-rate-reputation reputation-amount) 100)) 
+                  (>= reputation-amount min-allowed)
+                  (<= reputation-amount max-allowed)
+                  (>= new-total-reputation MIN_REPUTATION) 
+                  (<= new-total-reputation MAX_REPUTATION)) 
                 err-invalid-reputation-amount)
+
       (match (get-rated-height user-to-rate)
         height 
           (begin
-            (asserts! (>= stacks-block-height (+ height u1000)) err-already-made-at-this-block-height)
+            (asserts! (>= stacks-block-height (+ height u1000)) err-already-rated-recently)
             (let 
               (
-                (idx (unwrap! (find-index user-to-rate) err-bop))
+                (idx (unwrap! (find-index user-to-rate) err-invalid-operation))
                 (current-ratings (get ratings existing-data))
                 (previous-rating (unwrap! (element-at? current-ratings idx) err-maximum-ratings-reached))
               )
@@ -67,20 +92,19 @@
   )
 )
 
-;; This proved to be very ineficiently if it were to be used on every contract call (get-user-reputation/ rate-user)
+;; Apply reputation decay if enough time has passed
+;; @param user: The principal whose reputation should be decayed
+;; @returns: The updated reputation after decay
 (define-public (optional-decay-reputation (user principal))
   (let 
     (
       (last-decay (default-to u0 (get last-decay (map-get? user-decay user)))) 
-      (decay-periods (/ (- stacks-block-height last-decay) u1000))
+      (decay-periods (/ (- stacks-block-height last-decay) DECAY_PERIOD))
       (current-rep (default-to 0 (get reputation (map-get? user-reputation user))))
     )
-    (print last-decay)
-    (print decay-periods)
-    (print current-rep)
     (if (or 
           (is-eq decay-periods u0)
-          (< stacks-block-height u1000)
+          (< stacks-block-height INITIAL_BLOCKS)
           (<= current-rep 0))
       (begin 
         (map-set user-decay user {last-decay: stacks-block-height})
